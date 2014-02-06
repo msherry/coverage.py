@@ -9,6 +9,7 @@ specified packages doesn't meet the thresholds given
 '''
 
 import ast
+import itertools
 import logging
 import logging.config
 import os
@@ -25,8 +26,9 @@ formatter = logging.Formatter('%(message)s')
 ch.setFormatter(formatter)
 logger.addHandler(ch)
 
-PACKAGES_XPATH = etree.XPath('/coverage/packages/package')
+PACKAGES_XPATH = etree.XPath('/coverage/packages/package/classes/class')
 FILES_XPATH = etree.XPath('/coverage/packages/package/classes/class')
+PACKAGE_SEPARATOR = '/'
 
 
 def check_package_coverage(root, package_coverage_dict):
@@ -34,36 +36,39 @@ def check_package_coverage(root, package_coverage_dict):
 
     packages = PACKAGES_XPATH(root)
     check_done = set()
+    sub_package_coverage = []
 
     for package in packages:
         name = package.get('name')
         do_check = False
         check_name = name
-        if name in package_coverage_dict:
-            # We care about this one
-            do_check = True
-        else:
-            # Check subpackages
-            name_parts = name.split('.')
-            for i in range(len(name_parts) - 1, 1, -1):
-                possible_name = '.'.join(name_parts[:i])
-                if possible_name in package_coverage_dict:
-                    do_check = True
-                    check_name = possible_name
-                    break
 
-        if do_check:
-            check_done.add(check_name)
-            logger.info('Checking package {} -- need {}% coverage'.format(
-                name, package_coverage_dict[check_name]))
-            coverage = float(package.get('line-rate', '100.0')) * 100
-            if coverage < package_coverage_dict[check_name]:
-                logger.warning('FAILED - Coverage for package {} is {}% -- '
-                       'minimum is {}%'.format(
-                        name, coverage, package_coverage_dict[check_name]))
-                failed = True
-            else:
-                logger.info("PASS")
+        name_parts = name.split(PACKAGE_SEPARATOR)
+
+        for i in xrange(len(name_parts), 0, -1):
+            possible_name = PACKAGE_SEPARATOR.join(name_parts[:i])
+            if possible_name in package_coverage_dict:
+                sub_package_coverage.append(
+                    (possible_name, name, float(package.get('line-rate', '100.0')) * 100)
+                )
+                break
+
+    grouped = itertools.groupby(sorted(sub_package_coverage), lambda x: x[0])
+
+    for check_name, scores in grouped:
+
+        check_done.add(check_name)
+        logger.info('Checking package {} -- need {}% coverage'.format(
+            name, package_coverage_dict[check_name]))
+        scores = list(scores)
+        coverage = sum(s[2] for s in scores) / len(scores)
+        if coverage < package_coverage_dict[check_name]:
+            logger.warning('FAILED - Coverage for package {} is {}% -- '
+                   'minimum is {}%'.format(
+                    name, coverage, package_coverage_dict[check_name]))
+            failed = True
+        else:
+            logger.info("PASS")
 
     if set(package_coverage_dict.keys()) - check_done:
         failed = True
